@@ -1,11 +1,10 @@
-
 import json
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
+# MessagesPlaceholder 占位    在提示词占位
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
-
-
+# 本地存储
 from langchain.schema import messages_from_dict, messages_to_dict
 from dotenv import load_dotenv
 import os
@@ -13,10 +12,9 @@ import os
 # 加载环境变量（需要包含API_KEY）
 load_dotenv()
 
-
 # 初始化大语言模型（通义千问）
 llm = ChatOpenAI(
-    api_key=os.getenv("DASHSCOPE_API_KEY"),  # 从环境变量读取API密钥
+    api_key=os.getenv("api_key"),  # 从环境变量读取API密钥
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",  # 阿里云兼容端点
     model="qwen-turbo"  # 使用qwen-turbo模型
 )
@@ -34,18 +32,34 @@ prompt = ChatPromptTemplate.from_messages([
 # 构建基础对话链（组合提示模板和语言模型）
 base_chain = prompt | llm
 
+# 创建一个回话存储的字典
 store = {}
-# {
-#     第一个窗口对话:{ai:xxx,user:xxx, ai:xxx, user:xxx}
-#     第二个窗口对话:{ai:xxx,user:xxx, ai:xxx, user:xxx}
-#     第三个窗口对话:{ai:xxx,user:xxx, ai:xxx, user:xxx}
-#  }
+
+
+# 作用  用来判断是新用户 还是老用户
 def get_session_history(session_id):
+    # 判断是那个用的消息记录
+    """获取或创建会话历史存储对象
+    Args:
+        session_id: 会话唯一标识（用于多会话隔离）
+    Returns:
+        对应会话的聊天历史记录对象
+    """
     if session_id not in store:
-        store[session_id] = ChatMessageHistory()
+        store[session_id] = ChatMessageHistory()  # 初始化空历史记录
     return store[session_id]
 
 
+# 创建支持历史记录的对话链   不是存储
+conversation = RunnableWithMessageHistory(
+    base_chain,  # 基础对话链
+    get_session_history=get_session_history,  # 历史记录获取方法
+    input_messages_key="input",  # 输入文本的键名
+    history_messages_key="history"  # 历史记录的键名（需与提示模板中的变量名一致）
+)
+
+
+# 把消息存在文件当中
 def save_memory(filepath, session_id):
     """保存指定会话的历史记录到文件
     Args:
@@ -60,6 +74,7 @@ def save_memory(filepath, session_id):
         json.dump(dicts, f, ensure_ascii=False)
 
 
+# 重文件中读取消息
 def load_memory(filepath, session_id):
     """从文件加载历史记录到指定会话
     Args:
@@ -70,20 +85,19 @@ def load_memory(filepath, session_id):
         dicts = json.load(f)
     # 将字典转换回消息对象列表
     messages = messages_from_dict(dicts)
-    # 更新全局存储中的会话历史
+    # 更新全局存储中的会话历史  恢复聊天消息
     store[session_id] = ChatMessageHistory(messages=messages)
 
 
-
-# 聊天记录对话链
-conversation = RunnableWithMessageHistory(
-    runnable=base_chain,   # 基础对话链
-    get_session_history=get_session_history,  # 获取历史记录的方法
-    input_messages_key='input',
-    history_messages_key='history',
-)
-
+# 进行提问
 def legacy_predict(input_text, session_id):
+    """模拟旧版predict方法的调用接口
+    Args:
+        input_text: 用户输入文本
+        session_id: 会话ID（默认"default"）
+    Returns:
+        AI生成的回复文本
+    """
     return conversation.invoke(
         {"input": input_text},  # 输入参数
         # 配置参数（必须包含session_id来关联历史记录）
@@ -91,19 +105,22 @@ def legacy_predict(input_text, session_id):
     ).content
 
 
-
 if __name__ == '__main__':
+    SESSION_ID = "default"  # 会话ID
+    # # 模拟连续对话（4轮）
+    # legacy_predict("你好", SESSION_ID)  # 问候
+    # legacy_predict("你是谁,我是柏汌", SESSION_ID)  # 身份确认
+    # legacy_predict("你的背后实现原理是什么", SESSION_ID)  # 技术原理询问
+    #
+    # # 查询对话历史（第4轮）
+    # last_response = legacy_predict('截止到现在我们聊了什么?', SESSION_ID)
+    # print("最后一次回答:", last_response)
+    #
+    # # 持久化保存对话历史（JSON格式）
+    # save_memory("./memory_new.json", SESSION_ID)
 
-    session_id = 'aaaaa'
-    # print(legacy_predict("你好", session_id))
-    # print(legacy_predict("你是谁,我是柏汌", session_id))
-    # save_memory("memory.json", session_id)
-
-    load_memory("memory.json", session_id)
-    print(legacy_predict("我是谁?", session_id))
-
-
-
-
-
-
+    # 模拟重新加载历史记录（清空当前会话后重新加载）
+    load_memory("./memory_new.json", SESSION_ID)
+    # 验证历史恢复效果（第5轮）
+    reload_response = legacy_predict("我回来了，我们之前都聊了一些什么?", SESSION_ID)
+    print("\n恢复后的回答:", reload_response)

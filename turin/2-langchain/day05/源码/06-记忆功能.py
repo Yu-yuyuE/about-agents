@@ -1,13 +1,12 @@
 
-
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 import os
 load_dotenv()
 
-llm = ChatOpenAI(api_key=os.getenv("DASHSCOPE_API_KEY"),
-                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                 model_name="qwen-plus")
+llm = ChatOpenAI(api_key=os.getenv("api_key"),
+                 base_url=os.getenv("base_url"),
+                 model_name="qwen-turbo")
 
 # 直接提供问题，并调用llm
 response = llm.invoke("你好我是柏汌")

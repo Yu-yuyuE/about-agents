@@ -1,0 +1,25 @@
+
+
+
+OpenAI Functions Agent
+    最基本的使用agent的方式
+
+
+React agent   聊天代理
+    自我反思
+    自我纠错    尝试进行修复
+    迭代学习    优化自己     训狗    打分
+    可解释性
+
+create_self_ask_with_search_agent   自我询问    llm
+
+
+Agent  智能体
+tools
+
+
+memory 记忆
+    不具备 存上下文的问题
+
+
+

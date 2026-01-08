@@ -115,7 +115,107 @@ print(response.content)
 
 ```
 
-##### 4.2 向量存储
+- 多轮对话的封装 
+
+```
+import os
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain.schema import (
+    AIMessage,  # 等价于OpenAI接口中的assistant role AI 模型的回复消息
+    HumanMessage,  # 等价于OpenAI接口中的user role  表示用户输入的消息
+    SystemMessage  # 等价于OpenAI接口中的system role  系统级指令或背景设定
+)
+
+load_dotenv()
+
+llm = ChatOpenAI(model_name='qwen-max',
+                 api_key=os.getenv("api_key"),
+                 base_url=os.getenv("base_url")  # 默认是gpt-3.5-turbo
+)
+messages = [
+    SystemMessage(content="你是各位老师的个人助理。你叫小戈"),
+    HumanMessage(content="我的名字叫小张"),
+    AIMessage(content="不好意思，暂时无法获取天气情况"),
+    # HumanMessage(content="我是谁？")
+    HumanMessage(content="今天天气怎么样")
+]
+response = llm.invoke(messages)
+print(response.content)
+
+```
+
+##### 4.2  使用提示模板
+
+```
+
+
+# 我们也可以创建prompt template, 并引入一些变量到prompt template中，这样在应用的时候更加灵活
+from langchain_core.prompts import ChatPromptTemplate
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+import os
+
+load_dotenv()
+llm = ChatOpenAI(api_key=os.getenv("api_key"),
+                 base_url=os.getenv("base_url"),
+                 model_name="qwen-plus")
+
+# 需要注意的一点是，这里需要指明具体的role，在这里是system和用户
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "您是世界级的技术文档编写者"),
+    ("user", "{input}")  # {input}为变量
+])
+print(prompt)
+
+# 我们可以把prompt和具体llm的调用和在一起（通过chain，chain可以理解为sequence of calls to take）  Linux  ps aux | grep redis
+chain = prompt | llm
+response = chain.invoke({"input": "大模型中的LangChain是什么?"})
+print(response.content)
+
+```
+
+##### 4.3 使用输出解释器
+
+```
+
+
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+# 初始化模型
+llm = ChatOpenAI(api_key=os.getenv("api_key"),
+                 base_url=os.getenv("base_url"),
+                 model_name="qwen-plus")
+
+# 创建提示模板
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "您是世界级的技术文档编写者。"),
+    ("user", "{input}")
+])
+
+# 使用输出解析器
+# output_parser = StrOutputParser()
+output_parser = JsonOutputParser()
+
+# 将其添加到上一个链中
+chain = prompt | llm | output_parser
+# chain = prompt | llm
+
+# 调用它并提出同样的问题。答案是一个字符串，而不是ChatMessage
+# 如果你没有让大模型使用json格式输出，会报错
+# res = chain.invoke({"input": "LangChain是什么?"})
+res = chain.invoke({"input": "LangChain是什么? 问题用question 回答用answer 用JSON格式回复"})
+
+print(res)
+
+```
+
+##### 4.4 向量存储
 
 - 使用一个简单的本地向量存储 FAISS，首先需要安装它 
 
@@ -126,94 +226,62 @@ pip install dashscope
 ```
 
 ```
+# 导入和使用 WebBaseLoader
 import os
-from langchain_community.document_loaders import WebBaseLoader
-import bs4
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import DashScopeEmbeddings
-from langchain_community.vectorstores import FAISS
-from dotenv import load_dotenv
 
-# 加载环境变量
+from langchain_community.document_loaders import WebBaseLoader
+from dotenv import load_dotenv
+import bs4
+# 对于嵌入模型，这里通过 API调用  阿里社区提供的向量模型库
+from langchain_community.embeddings import DashScopeEmbeddings
+# 使用此嵌入模型将文档摄取到矢量存储中
+from langchain_community.vectorstores import FAISS
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 load_dotenv()
 
-# 初始化 WebBaseLoader
-loader = WebBaseLoader(
-    'https://www.gov.cn/zhengce/content/202510/content_7043916.htm',
-    bs_kwargs=dict(parse_only=bs4.SoupStrainer(id='UCAP-CONTENT'))
-)
-docs = loader.load()
 
-# 分割文档
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=300,
-    chunk_overlap=50,
-)
-documents = text_splitter.split_documents(docs)
-print(f"总文档数量: {len(documents)}")
-
-# 初始化 DashScope 嵌入模型
-embeddings = DashScopeEmbeddings(
-    dashscope_api_key=os.getenv("DASHSCOPE_API_KEY"),
-    model="text-embedding-v4",
-)
-
-# 初始化 FAISS 索引（第一次循环）
-vector = None
-batch_size = 10
-
-# 分批处理文档
-for i in range(0, len(documents), batch_size):
-    batch_docs = documents[i:i + batch_size]
-    print(f'第{i // batch_size + 1}批次 文档数量: {len(batch_docs)}')
-
-    # 第一批：创建新的 FAISS 索引
-    if i == 0:
-        vector = FAISS.from_documents(batch_docs, embeddings)
-    # 后续批次：将新文档添加到现有索引
-    else:
-        new_vector = FAISS.from_documents(batch_docs, embeddings)
-        vector.merge_from(new_vector)  # 合并新索引到现有索引
+def faiss_conn():
+    # 读取网页中的数据
+    loader = WebBaseLoader(
+        web_path="https://www.gov.cn/xinwen/2020-06/01/content_5516649.htm",
+        bs_kwargs=dict(parse_only=bs4.SoupStrainer(id="UCAP-CONTENT"))
+    )
+    # 读取数据
+    docs = loader.load()
+    # print(docs)
+    # 创建向量模型
+    embeddings = DashScopeEmbeddings(dashscope_api_key=os.getenv("api_key"), model='text-embedding-v3')
+    print(embeddings)
+    # 使用分割器分割文档
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    documents = text_splitter.split_documents(docs)
+    print(documents)
+    # 向量存储  embeddings 会将 documents 中的每个文本片段转换为向量，并将这些向量存储在 FAISS 向量数据库中
+    vector = FAISS.from_documents(documents, embeddings)
+    return vector
 
 
-vector.save_local("faiss_index")
-print("FAISS 索引已保存到 faiss_index 文件夹")
+faiss_conn()
 
 ```
 
-##### 4.3 RAG+Langchain 
+##### 4.5 RAG+Langchain 
 
 > 基于外部知识，增强大模型回复 
 
 ```
-import os
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain.chains import create_retrieval_chain
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import DashScopeEmbeddings
+import os
+from aa向量存储 import faiss_conn
 from dotenv import load_dotenv
 
-# 加载环境变量（用于 LLM 的 API 密钥）
 load_dotenv()
 
-# 创建嵌入模型
-embeddings = DashScopeEmbeddings(
-    dashscope_api_key=os.getenv("DASHSCOPE_API_KEY"),
-    model='text-embedding-v4'
-)
-# 加载本地 FAISS 索引
-save_path = "faiss_index_v3"
-
-vector_store = FAISS.load_local(
-    folder_path=save_path,
-    embeddings=embeddings,
-    allow_dangerous_deserialization=True  # 允许加载 pickle 文件（仅限可信文件）
-)
-
-
-# 创建提示模板
+# {context}变量必须包含
 prompt = ChatPromptTemplate.from_template("""仅根据提供的上下文回答以下问题:
 
 <context>
@@ -221,33 +289,75 @@ prompt = ChatPromptTemplate.from_template("""仅根据提供的上下文回答�
 </context>
 
 问题: {input}""")
+# 创建llm连接
+llm = ChatOpenAI(api_key=os.getenv("api_key"),
+                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                 model='qwen-plus')
+# 创建文档组合链  将文档内容和用户问题组合成一个完整的提示，然后传递给语言模型生成回答
+document_chain = create_stuff_documents_chain(llm, prompt)
+# 生成检索器示例
+retriever = faiss_conn().as_retriever()
+retriever.search_kwargs = {"k": 3}  # 限制为最多检索3个文档
+# 创建检索链   该链结合了检索器和文档组合链，实现了从向量数据库中检索相关文档，并将这些文档与用户问题组合成提示
+retrieval_chain = create_retrieval_chain(retriever, document_chain)
+# 调用检索链并获取回答
+response = retrieval_chain.invoke({"input": "建设用地使用权是什么？"})
+print(response["answer"])
+```
 
-# 创建 LLM 连接（继续使用阿里云 qwen-plus）
-llm = ChatOpenAI(
-    api_key=os.getenv("DASHSCOPE_API_KEY"),  # 确保环境变量名为 DASHSCOPE_API_KEY
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model="qwen-plus"
+##### 4.6 代理使用 
+
+在LangChain框架中，Agents是一种利用大型语言模型（Large Language Models，简称LLMs）来执行任务和做出决策的系统
+
+在 LangChain 的世界里，Agent 是一个智能代理，它的任务是听取你的需求（用户输入）和分析当前的情境（应用场景），然后从它的工具箱（一系列可用工具）中选择最合适的工具来执行操作
+
+- 使用工具（Tool）：LangChain中的Agents可以使用一系列的工具（Tools）实现，这些工具可以是API调用、数据库查询、文件处理等，Agents通过这些工具来执行特定的功能。
+- 推理引擎（Reasoning Engine）：Agents使用语言模型作为推理引擎，以确定在给定情境下应该采取哪些行动，以及这些行动的执行顺序。
+- 可追溯性（Traceability）：LangChain的Agents操作是可追溯的，这意味着可以记录和审查Agents执行的所有步骤，这对于调试和理解代理的行为非常有用。
+- 自定义（Customizability）：开发者可以根据需要自定义Agents的行为，包括创建新的工具、定义新的Agents类型或修改现有的Agents。
+- 交互式（Interactivity）：Agents可以与用户进行交互，响应用户的查询，并根据用户的输入采取行动。
+- 记忆能力（Memory）：LangChain的Agents可以被赋予记忆能力，这意味着它们可以记住先前的交互和状态，从而在后续的决策中使用这些信息。
+- 执行器（Agent Executor）：LangChain提供了Agent Executor，这是一个用来运行代理并执行其决策的工具，负责协调代理的决策和实际的工具执行。
+
+```
+from langchain_openai import ChatOpenAI
+from langchain import hub
+from langchain.agents import create_openai_functions_agent
+from langchain.agents import AgentExecutor
+from langchain.tools.retriever import create_retriever_tool
+import os
+from aa向量存储 import faiss_conn
+from dotenv import load_dotenv
+
+load_dotenv()
+# 读取数据
+retriever = faiss_conn().as_retriever()
+
+# 检索器工具
+retriever_tool = create_retriever_tool(
+    retriever,
+    "中华人民共和国民法典的一个检索器工具",
+    "搜索有关中华人民共和国民法典的信息。关于中华人民共和国民法典的任何问题，您必须使用此工具!",
 )
 
-# 创建文档组合链
-# langchain_core\prompts\chat.py可以看到提示词拼接
-# format_messages 方法拼接提示词
-document_chain = create_stuff_documents_chain(llm, prompt)
+tools = [retriever_tool]
 
-# 创建检索器
-retriever = vector_store.as_retriever(search_kwargs={"k": 3})  # 限制检索 3 个文档
+# https://smith.langchain.com/hub
+# 使用在线的提示词模板
+prompt = hub.pull("hwchase17/openai-functions-agent")
 
-# 创建检索链
-# 在langchain_community\vectorstores\faiss.py 可以查看向量检索的实现
-# similarity_search_with_score_by_vector 是检索的方法  return docs[:k]
-retrieval_chain = create_retrieval_chain(retriever, document_chain)
+llm = ChatOpenAI(api_key=os.getenv("api_key"),
+                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                 model='qwen-plus')
+# 创建一个agent代理，tools：该代理可以访问的工具
+agent = create_openai_functions_agent(llm, tools, prompt)
+# agent：要执行那个代理 tools：代理可以调用的工具，verbose：是否以详细模型运行，
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
-# 调用检索链并获取回答
-# openai\resources\chat\completions\completions.py
-# create方法中 self._post()  调用模型请求的api
-response = retrieval_chain.invoke({"input": "建设用地使用权是什么？"})
+# 运行代理
+res = agent_executor.invoke({"input": "你是谁？"})
+print(res)
 
-print("\n回答:", response["answer"])
 ```
 
 
@@ -518,7 +628,7 @@ LangChain的核心组件是大型语言模型（LLM），它提供一个标准�
 文本补全-千问不支持
 
 ```
-from langchain_community.llms import Tongyi
+from langchain_community.chat_models import ChatTongyi
 from dotenv import load_dotenv
 import os
 
@@ -526,13 +636,13 @@ load_dotenv()
 
 
 # LLM纯文本补全模型
-llm = Tongyi(api_key=os.getenv("DASHSCOPE_API_KEY"),
+llm = ChatTongyi(api_key=os.getenv("api_key"),
                  base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                 model='qwen-plus')
+                 model='deepseek-v3')
 
 text = "我的真的好想（帮我补全这个文本）"
 res = llm.invoke(text)
-print(res)
+print(res.content)
 ```
 
 ##### 2.2 聊天模型
@@ -546,7 +656,7 @@ LangChain有一些内置的消息类型
 - AIMessage:表示来自聊天模型的消息。这可以是文本，也可以是调用工具的请求。
 
 ```
-from langchain_community.chat_models import ChatTongyi
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 import os
@@ -556,7 +666,7 @@ load_dotenv()
 human_text = "你好啊"
 system_text = "你是一个强大的助手，你的名字叫0713"
 # 聊天模型
-chat_model = ChatTongyi(
+chat_model = ChatOpenAI(
     api_key=os.getenv("DASHSCOPE_API_KEY"),
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     model="qwen-plus",  # 此处以qwen-plus为例，您可按需更换模型名称。模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
@@ -567,7 +677,7 @@ messages = [HumanMessage(content=human_text)]
 # messages = [SystemMessage(content=system_text), HumanMessage(content=human_text)]
 
 res = chat_model.invoke(messages)
-print(res)
+print(res.content)
 ```
 
 ##### 2.3 文本嵌入模型
@@ -622,9 +732,9 @@ from modelscope import snapshot_download
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # 创建嵌入模型
-model_name = r'D:\LLM\Local_model\BAAI\bge-large-zh-v1___5'
+model_name = r'D:\LLM\Local_model\maidalun\bce-embedding-base_v1'
 
-# 生成的嵌入向量将被标准化, 有助于向量比较
+# 生成的嵌入向量将被归一化, 有助于向量比较
 encode_kwargs = {'normalize_embeddings': True}
 
 embeddings = HuggingFaceEmbeddings(
@@ -638,16 +748,15 @@ print(query_result[:5])
 ```
 
 - 通过Hugging Face官方包的加持，开发小伙伴们通过简单的api调用就能在langchain中轻松使用Hugging Face上各类流行的开源大语言模型以及各类AI工具 
-- 访问：HuggingFace(`https://huggingface.co/settings/tokens`)，在个人设置中心，创建一个API Token  
 
 ```
 import os
 
-from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
+from langchain_huggingface import HuggingFaceEndpoint
 from dotenv import load_dotenv
 load_dotenv()
 
-ENDPOINT_URL = "Qwen/Qwen3-8B"
+ENDPOINT_URL = "HuggingFaceH4/zephyr-7b-beta"
 # ENDPOINT_URL = "deepseek-ai/DeepSeek-R1"
 HF_TOKEN = os.getenv('HF_TOKEN')
 
@@ -659,10 +768,9 @@ llm = HuggingFaceEndpoint(
     repetition_penalty=1.03,    # 对重复出现的 tokens 施加惩罚，避免生成重复的内容
     huggingfacehub_api_token=HF_TOKEN
 )
-# 生成key时需要把权限都点上
-chat_model = ChatHuggingFace(llm=llm)
-resp = chat_model.invoke("解释 prompt 是什么？")
-print(resp)
+
+print(llm.invoke("解释langchain是什么？"))
+# 生成token时需要把权限都点上
 ```
 
 ##### 2.4 输出解析器
@@ -680,7 +788,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 # 创建解析器
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser, XMLOutputParser
-from langchain.chains import LLMChain  # 新增：导入 LLMChain 用于非 LCEL 链式调用
 from dotenv import load_dotenv
 import os
 
@@ -688,7 +795,7 @@ load_dotenv()
 
 # 初始化语言模型
 model = ChatOpenAI(
-    api_key=os.getenv("DASHSCOPE_API_KEY"),
+    api_key=os.getenv("api_key"),
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     model="qwen-plus",
 )
@@ -703,12 +810,9 @@ prompt = ChatPromptTemplate.from_messages([
     ("user", "{input}")
 ])
 
-# 使用 LLMChain 构建链（非 LCEL 方式）
-chain = LLMChain(
-    llm=model,
-    prompt=prompt,
-    output_parser=xml_parser  # 指定输出解析器
-)
+# 将提示和模型合并以进行调用
+# chain = prompt | model | output_parser
+chain = prompt | model | xml_parser
 
 res = chain.invoke({"input": "langchain是什么? 使用xml格式输出"})
 # res = chain.invoke({"input": "langchain是什么? 问题用question 回答用ans 返回一个JSON格式"})
@@ -759,7 +863,6 @@ print(f"第0页：\n{pages[0]}")  ## 也可通过 pages[0].page_content只获取
 
 ```
 pip install unstructured
-# 官网:https://docs.unstructured.io/welcome
 # 下载时需要开科学上网不然会报错File is not a zip file
 # 如果报错开科学上网之后
 # import nltk
@@ -912,7 +1015,7 @@ print(embedded_query[:5])
 ```
 import os
 
-from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -932,12 +1035,9 @@ text_splitter = RecursiveCharacterTextSplitter(
 
 # 将数据进行切割成块
 paragraphs = text_splitter.create_documents([page.page_content for page in pages if pages])
-print(paragraphs)
-# 创建嵌入模型
-model_name = r'D:\LLM\Local_model\BAAI\bge-large-zh-v1___5'
-embeddings = HuggingFaceEmbeddings(model_name=model_name)
+
 # 创建chroma数据库，并将文本数据个向量化的数据存入
-db = Chroma.from_documents(paragraphs, embeddings, persist_directory="chroma_db")  # 一行代码搞定
+db = Chroma.from_documents(paragraphs, DashScopeEmbeddings(dashscope_api_key=os.getenv('api_key')))  # 一行代码搞定
 
 # 在数据库中进行搜索
 query = "会计核算基础规范"
@@ -956,38 +1056,40 @@ for doc in docs:
 
 ```
 import os
-from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+
+from langchain_community.embeddings import DashScopeEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
 
-# 加载环境变量
 load_dotenv()
+# 读取文件
+loader = PyPDFLoader("财务管理文档.pdf")
+pages = loader.load_and_split()
 
-# 创建嵌入模型
-model_name = r"D:\LLM\Local_model\BAAI\bge-large-zh-v1___5"
-
-embeddings = HuggingFaceEmbeddings(model_name=model_name)
-
-
-# 加载现有 Chroma 数据库
-persist_directory = "./chroma_db"
-
-db = Chroma(
-    persist_directory=persist_directory,
-    embedding_function=embeddings
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=200,
+    chunk_overlap=100,
+    length_function=len,
+    add_start_index=True,
 )
-print(f"成功加载 Chroma 数据库从 {persist_directory}")
 
-# 实例化检索器
-retriever = db.as_retriever(search_kwargs={"k": 4})  # 设置返回文档数量
+# 将数据进行切割成块
+paragraphs = text_splitter.create_documents([page.page_content for page in pages if pages])
+
+# 创建chroma数据库，并将文本数据个向量化的数据存入
+db = Chroma.from_documents(paragraphs, DashScopeEmbeddings(dashscope_api_key=os.getenv('api_key')))  # 一行代码搞定
+# 实例化一个检索器
+retriever = db.as_retriever()
+
+# 我们还可以限制检索器返回的文档数量
+# retriever = db.as_retriever(search_kwargs={"k": 1})
 
 # 获取问题相关文档
-query = "会计核算基础规范"
-
-docs = retriever.invoke(query)
-for i, doc in enumerate(docs, 1):
-    print(f"结果 {i}:\n{doc.page_content}")
-
+docs = retriever.get_relevant_documents("会计核算基础规范")
+for doc in docs:
+    print(f"{doc.page_content}\n-------\n")
 ```
 
 
@@ -1069,44 +1171,7 @@ print(result['text'])
 
 ##### 1.3 **使用表达式语言 (LCEL)** 
 
-- LangChain Expression Language 是一种以声明式方法，轻松地将链或组件组合在一起的机制。通过利用管道操作符，构建的任何链将自动具有完整的同步、异步和流式支持。
 - LangChain 表达式语言（LangChain Expression Language，简称 LCEL）是一种专为链组件（Chain）编排设计的声明式语法，其核心价值在于以统一的方式实现从简单到复杂的 AI 应用构建。从设计之初，LCEL 就致力于消除原型开发与生产部署间的鸿沟 —— 无论是基础的 "提示词 + LLM" 单链结构，还是包含 100 + 步骤的复杂工作流，均可通过同一套语法实现，无需修改代码逻辑。
-- python实现管道调用
-
-```
-
-from pipe import select
-
-numbers = [1,2,3]
-aa = list(numbers | select(lambda x: x*2))
-print(aa)
-
-```
-
-
-
-```
-class Chain():
-    def __init__(self, value):
-        self.value = value
-
-
-    def __or__(self, other):
-        # 调用 | 运算符  触发的魔法方法
-        return other(self.value)
-
-def prompt(text):
-    return "请求回答问题:{}".format(text)
-
-aa = Chain('人工智能是什么?')
-
-res = aa | prompt
-print(res)
-
-```
-
-
-
 - 普通调用 
 
 ![](images/040.png)
@@ -1214,7 +1279,6 @@ class TravelQASystem:
         )
         attraction_retrieval = (lambda x: x["location"]) | self.vector_store.as_retriever() | (
             lambda x: x[0].page_content)
-        # RunnableMap：并行执行天气查询和景点检索
         data_acquisition = RunnableMap({
             "weather": weather_query,
             "attraction": attraction_retrieval,
@@ -1231,28 +1295,18 @@ class TravelQASystem:
         ])
         generate_module = generate_prompt | self.llm | (lambda x: x.content.strip())
 
-        """
-        RunnableBranch实现
-        RunnableBranch(
-            (lambda x: 条件1, 执行的代码),
-            (lambda x: 条件2, 执行的代码2),
-            lambda x: {"location": x["location"], "attraction": attraction_retrieval.invoke(x)}
-        )
-        
-        """
         # 3.4 全流程串联
         self.travel_qa_pipeline = (
             # 阶段1：解析问题
-                parse_module
-                | (lambda x: {"location": x["location"], "type": x["type"]})
-                # 阶段2：并行获取数据（仅当查询类型为天气或行程时触发）
-                # RunnableBranch：根据查询类型选择数据获取路径
-                | RunnableBranch(
-            (lambda x: "天气" in x["type"], data_acquisition),
-            lambda x: {"location": x["location"], "attraction": attraction_retrieval.invoke(x)}
-        )
-                # 阶段3：生成回答
-                | generate_module
+            parse_module
+            | (lambda x: {"location": x["location"], "type": x["type"]})
+            # 阶段2：并行获取数据（仅当查询类型为天气或行程时触发）
+            | RunnableBranch(
+                (lambda x: "天气" in x["type"], data_acquisition),
+                lambda x: {"location": x["location"], "attraction": attraction_retrieval.invoke(x)}
+            )
+            # 阶段3：生成回答
+            | generate_module
         )
 
     def process_user_question(self, user_question):
@@ -1263,10 +1317,11 @@ class TravelQASystem:
         return response
 
 
+
 # 示例用法
 if __name__ == "__main__":
     # 替换为实际API密钥
-    OPENAI_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+    OPENAI_API_KEY = os.getenv("api_key")
     # https://www.tavily.com/
     SERPAPI_API_KEY = os.getenv("TAVILY_API_KEY")
     embed_path = r"D:\LLM\Local_model\BAAI\bge-large-zh-v1___5"
@@ -1280,11 +1335,32 @@ if __name__ == "__main__":
     answer1 = travel_qa.process_user_question(question1)
     print(f"User Question: {question1}\nAI Answer: {answer1}\n")
 
+
 ```
 
+#### 3. chain调用原理
+
+```
+class Chain():
+    def __init__(self, value):
+        self.value = value
 
 
-#### 3. 链的调用方式
+    def __or__(self, other):
+        # 调用 | 运算符  触发的魔法方法
+        return other(self.value)
+
+def prompt(text):
+    return "请求回答问题:{}".format(text)
+
+aa = Chain('人工智能是什么?')
+
+res = aa | prompt
+print(res)
+
+```
+
+#### 4. 链的调用方式
 
 - **通过invoke方法** 
 
@@ -1311,6 +1387,33 @@ chain = prompt | llm
 
 # 调用Chain，返回结果
 result = chain.invoke({"number": "3"})
+print(result)
+```
+
+- **通过predict方法**,将输入键指定为关键字参数 
+
+```
+from langchain.chains.llm import LLMChain
+from langchain_core.prompts import PromptTemplate
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# 创建模型实例
+template = "桌上有{number}个苹果，四个桃子和 3 本书，一共有几个水果?"
+prompt = PromptTemplate(template=template, input_variables=["number"])
+
+# 创建模型实例
+llm = ChatOpenAI(api_key=os.getenv("api_key"),
+                 base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                 model='qwen-plus',
+                 temperature=0)
+# 创建LLMChain    0.1.17 开始被标记为弃用，并计划在未来的 1.0 版本中移除
+llm_chain = LLMChain(llm=llm, prompt=prompt)
+# 调用LLMChain，返回结果
+result = llm_chain.predict(number=3)
 print(result)
 ```
 
@@ -1451,18 +1554,6 @@ print("查询结果：", db.run(response[10:]))
 
 
 ### 五. Agent代理
-
-在LangChain框架中，Agents是一种利用大型语言模型（Large Language Models，简称LLMs）来执行任务和做出决策的系统
-
-在 LangChain 的世界里，Agent 是一个智能代理，它的任务是听取你的需求（用户输入）和分析当前的情境（应用场景），然后从它的工具箱（一系列可用工具）中选择最合适的工具来执行操作
-
-- 使用工具（Tool）：LangChain中的Agents可以使用一系列的工具（Tools）实现，这些工具可以是API调用、数据库查询、文件处理等，Agents通过这些工具来执行特定的功能。
-- 推理引擎（Reasoning Engine）：Agents使用语言模型作为推理引擎，以确定在给定情境下应该采取哪些行动，以及这些行动的执行顺序。
-- 可追溯性（Traceability）：LangChain的Agents操作是可追溯的，这意味着可以记录和审查Agents执行的所有步骤，这对于调试和理解代理的行为非常有用。
-- 自定义（Customizability）：开发者可以根据需要自定义Agents的行为，包括创建新的工具、定义新的Agents类型或修改现有的Agents。
-- 交互式（Interactivity）：Agents可以与用户进行交互，响应用户的查询，并根据用户的输入采取行动。
-- 记忆能力（Memory）：LangChain的Agents可以被赋予记忆能力，这意味着它们可以记住先前的交互和状态，从而在后续的决策中使用这些信息。
-- 执行器（Agent Executor）：LangChain提供了Agent Executor，这是一个用来运行代理并执行其决策的工具，负责协调代理的决策和实际的工具执行。
 
 Agent代理的核心思想是使用语言模型来选择要采取的一系列动作。在链中，动作序列是硬编码的。
 
@@ -1638,8 +1729,6 @@ agent_executor.invoke({"input": "美国2024年谁胜出了总统的选举?"})
 
 ```
 
-![](./images/083.png)
-
 
 
 #### 2. OpenAI Functions Agent
@@ -1752,6 +1841,94 @@ for input in queries:
 
 
 
+#### 3. ReAct Agent
+
+ReAct (Reflective Agent) 是 LangChain 中的一种聊天代理(Agent)类型。它具有以下独特的特点:
+
+- 反思能力：ReAct 代理在给出响应之前,会先对自己的行为和预测进行深入的反思和评估。它会检查自己是否遵循了预先设定的规则和指令,是否达到了预期的目标。
+- 自我纠错：如果ReAct代理在反思过程中发现自己存在问题或疏漏,它会主动尝试对自己的行为进行纠正和改正,以修复错误,提高自身的表现。
+- 迭代学习：通过不断的反思和自我纠错,ReAct 代理可以在与用户的交互中逐步学习和优化自己的行为方式,不断提高回答的质量和准确性。
+- 可解释性：ReAct 代理在给出最终响应时,会同时提供自己的思考过程和决策依据,使得它的行为更加透明和可解释。
+
+这种具备反思和自我纠错能力的 ReAct 代理,在需要较高可靠性和稳定性的应用场景中很有优势,例如智能客服、问答系统、任务执行等。它可以通过持续的自我学习和优化,为用户提供更加智能和可信的交互体验。
+
+Google搜索API：访问 SerpApi ，注册账号，选择相应的订阅计划(Free)，然后获取API Key，利用这个API为大模型提供Google搜索工具。
+
+SerpApi：https://serpapi.com/ 
+
+```
+# 安装模块
+pip install google-search-results
+```
+
+```
+from langchain_community.agent_toolkits.load_tools import load_tools
+from langchain.agents import initialize_agent
+from langchain.agents import AgentType
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+# 开启DEBUG 显示具体的日志信息
+# langchain.debug = True
+# langchain.verbose = True
+
+# 初始化大模型:语言模型控制代理
+llm = ChatOpenAI(
+    api_key=os.getenv("api_key"),
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model="qwen-plus"
+)
+
+# 设置工具:加载使用的工具，serpapi:调用Google搜索引擎 
+tools = load_tools(["serpapi"], llm=llm, SERPAPI_API_KEY=os.getenv("SERPAPI_API_KEY"))
+
+# 初始化Agent:使用工具、语言模型和代理类型来初始化代理    ZERO_SHOT_REACT_DESCRIPTION 类型的代理可以在没有预先训练的情况下尝试解决新的问题
+agent = initialize_agent(tools, llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True)
+
+# 让代理来回答提出的问题
+agent.invoke({"input": "目前市场上苹果手机16的售价是多少？用中文回答"})
+
+```
+
+#### 4. Self-Ask with Search Agent 
+
+Self-Ask with Search是一个通过搜索自我询问的代理，通过询问+答案的机制来帮助大模型寻找事实性问题的过渡性答案，从而引出最终答案。 
+
+```
+import os
+
+from dotenv import load_dotenv
+from langchain import hub
+from langchain.agents import AgentExecutor, create_self_ask_with_search_agent
+from langchain_community.tools.tavily_search import TavilyAnswer
+from langchain_openai import ChatOpenAI
+load_dotenv()
+# 将初始化工具，让它提供答案而不是文档
+tools = [TavilyAnswer(name="Intermediate Answer", description="Answer Search")]
+
+# 初始化大模型
+llm = ChatOpenAI(
+    api_key=os.getenv("api_key"),
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model="qwen-plus"
+)
+
+# 获取使用提示 可以修改此提示
+prompt = hub.pull("hwchase17/self-ask-with-search")
+
+# 使用搜索代理构建自助询问
+agent = create_self_ask_with_search_agent(llm, tools, prompt)
+
+# 通过传入代理和工具创建代理执行程序
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
+
+# 运行代理
+agent_executor.invoke({"input": "中国有哪些省份呢?"})
+```
+
 ### 六. LangChain之Tools工具
 
 #### 1. 工具Tools
@@ -1771,15 +1948,18 @@ Langchain地址：https://python.langchain.com/api_reference/community/tools.htm
 ##### 1.1 工具的初步认识
 
 ```
-
-from langchain_community.tools.tavily_search import TavilySearchResults
+# pip install wikipedia
+from langchain_community.tools import WikipediaQueryRun
+from langchain_community.utilities import WikipediaAPIWrapper
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
 
 # 初始化工具 可以根据需要进行配置
-tool = TavilySearchResults(top_k_results=1, doc_content_chars_max=100)
+# 使用包装器WikipediaAPIWrapper进行搜索并获取页面摘要。默认情况下，它将返回前 k 个结果的页面摘要。它通过 doc_content_chars_max 限制文档内容。
+api_wrapper = WikipediaAPIWrapper(top_k_results=1, doc_content_chars_max=100)
+tool = WikipediaQueryRun(api_wrapper=api_wrapper)
 
 # 工具默认名称
 print("name:", tool.name)
@@ -1797,7 +1977,43 @@ print(tool.run("langchain"))
 # 需要科学上网
 ```
 
-##### 1.2 **自定义工具** 
+##### 1.2 **自定义默认工具** 
+
+- 可以修改参数的内置名称、描述和JSON模式。 
+
+```
+from langchain_community.tools import WikipediaQueryRun
+from langchain_community.utilities import WikipediaAPIWrapper
+from pydantic import BaseModel, Field
+
+# 初始化工具 可以根据需要进行配置
+api_wrapper = WikipediaAPIWrapper(top_k_results=1, doc_content_chars_max=100)
+
+
+class WikiInputs(BaseModel):
+    """维基百科工具的输入。"""
+
+    query: str = Field(
+        description="维基百科中的查询，字数应在3个字以内"
+    )
+
+
+tool = WikipediaQueryRun(
+    name="wiki-tool",
+    description="在维基百科中查找内容",
+    args_schema=WikiInputs,
+    api_wrapper=api_wrapper,
+    return_direct=True,
+)
+
+# 工具默认名称
+print("name:", tool.name)
+# 工具默认的描述
+print("description:", tool.description)
+print(tool.run("langchain"))
+```
+
+##### 1.3 **自定义工具** 
 
 - 在LangChain中，自定义工具有多种方法 
 - **@tool装饰器** 
@@ -1821,6 +2037,45 @@ res = add_number.run({"a": 10, "b": 20})
 print(res)
 
 ```
+
+##### 1.4 更多Tools
+
+- Tavily Search工具：Tavily的搜索API是一个专门为人工智能代理(llm)构建的搜索引擎，可以快速提供实时、准确和真实的结果。
+- 访问Tavily（`https://tavily.com/`）注册账号并登录，获取API 密钥
+
+```
+from langchain import hub
+from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_openai import ChatOpenAI
+load_dotenv()
+tool = TavilySearchResults(max_results=1)
+#  使用Tavily搜索工具
+tools = [TavilySearchResults(max_results=1,  tavily_api_key=os.getenv("TAVILY_API_KEY"))]
+# print(tool.run("目前市场上黄金的售价是多少?"))
+# https://smith.langchain.com/hub
+# 获取要使用的提示
+prompt = hub.pull("hwchase17/openai-tools-agent")
+
+# 初始化大模型
+llm = ChatOpenAI(
+    api_key=os.getenv("api_key"),
+    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model="qwen-plus"
+)
+
+# 构建 OpenAI 工具代理
+agent = create_openai_tools_agent(llm, tools, prompt)
+
+# 通过传入代理和工具创建代理执行程序
+agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+# 运行代理
+agent_executor.invoke({"input": "中国有多少个省份？"})
+
+```
+
+
 
 
 
@@ -2024,141 +2279,4 @@ if __name__ == "__main__":
     print("\n恢复后的回答:", reload_response)
 ```
 
-
-
-### 八. `LangSmith`使用
-
-#### 1. 什么是 `LangSmith`？
-
-`LangSmith` 是一个用于构建、调试和监控大型语言模型 (LLM) 应用的平台，由 LangChain 团队开发。它帮助开发者跟踪 LLM 的调用、性能和输出，优化提示词（Prompt）设计，并管理数据集和评估。
-
-**主要功能:**
-
-- **跟踪（Tracing）**：记录 LLM 调用、输入输出和元数据。
-- **调试（Debugging）**：分析模型行为，识别问题。
-- **数据集管理**：创建和维护测试数据集。
-- **评估（Evaluation）**：运行测试用例，评估模型性能。
-- **监控（Monitoring）**：实时监控生产环境中的 LLM 应用。
-
-#### 2. 配置 API 密钥
-
-1. 注册 `LangSmith` 账号。
-   - https://smith.langchain.com/
-2. 在 `LangSmith` 仪表板中获取 API 密钥。
-
-![](images/084.png)
-
-3. 设置环境变量：
-
-```
-LANGSMITH_API_KEY = 'Langsmith-key'
-LANGCHAIN_TRACING_V2="true"
-LANGCHAIN_PROJECT="在Langsmith存储的名称"
-LANGCHAIN_ENDPOINT="https://api.smith.langchain.com" # 任务发布站点
-```
-
-4. 执行代码不需要有任何的改动,会自动把执行的内容上传到`Langsmith`进行管理,在平台把任务已树结构展示项目的内容,展示项目的耗时,加载的提示词内容等等  
-
-![](images/085.png)
-
-```
-from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
-load_dotenv()
-
-import os
-
-
-
-
-# 定义小红书文案提示词
-prompt = PromptTemplate.from_template("""
-你是一位小红书内容创作者，擅长撰写简洁、吸引人的种草文案。目标是创作100-150字的小红书风格文案，面向18-35岁用户，激发兴趣和互动。
-
-**输入**：
-- 产品/主题：{product}
-- 核心特点：{features}
-- 目标情绪：{emotion}
-- 目标行动：{action}
-
-**要求**：
-1. 风格：亲切、口语化，带小幽默或生活场景，融入“种草”“安利”等流行词。
-2. 结构：吸睛开头（问题/场景），中间突出特点，结尾引导互动（提问/号召）。
-3. 使用1-2个emoji，保持自然。
-4. 标题：10字以内。
-
-**输出**：
-标题:
-文案正文:分2-3段，每段2-3句，结尾带互动引导
-""")
-
-llm = ChatOpenAI(
-    api_key=os.getenv("DASHSCOPE_API_KEY"),
-    base_url=os.getenv("DASHSCOPE_BASE_URL"),
-    model='qwen-plus'
-)
-
-# 创建 LangChain 链
-chain = prompt | llm
-
-# 输入示例
-input_data = {
-    "product": "无线耳机",
-    "features": "音质清晰、佩戴舒适、续航长",
-    "emotion": "科技感、轻松",
-    "action": "分享体验"
-}
-response = chain.invoke(input_data)
-# 输出生成的小红书文案
-print(response.content)
-
-```
-
-
-
-#### 3. 提示词优化
-
-- `Langsmith` 提供了提示词优化和导出提示词模版,可以用`Langsmith` 优化自己的提示词得到满意的输出,在将提示词导出使用
-
-![](images/086.png)
-
-- 使用`Langsmith`生成提示词
-
-```
-from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
-load_dotenv()
-from langsmith import Client
-
-import os
-
-client = Client(api_key=os.getenv("LANGSMITH_API_KEY"))
-prompt = client.pull_prompt("test")
-
-print(prompt)
-llm = ChatOpenAI(
-    api_key=os.getenv("DASHSCOPE_API_KEY"),
-    base_url=os.getenv("DASHSCOPE_BASE_URL"),
-    model='qwen-plus'
-)
-
-# 创建 LangChain 链
-chain = prompt | llm
-
-# 输入示例
-input_data = {
-    "product": "无线耳机",
-    "features": "音质清晰、佩戴舒适、续航长",
-    "emotion": "科技感、轻松",
-    "action": "分享体验"
-}
-
-response = chain.invoke(input_data)
-
-# 输出生成的小红书文案
-print(response.content)
-
-```
 
