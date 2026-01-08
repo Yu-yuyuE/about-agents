@@ -1,0 +1,16 @@
+
+
+database   数据库相关内容
+document_processor.py     文档加载
+rag_system.py      rag 文件
+
+vector_store.py  向量数据库文件
+
+app.py   主文件
+
+
+第一步   根据用户上传的文件 选择解析工具
+    根据不同的文档 选择解析器
+    父文档分割     [Document(metadata={'parent_id': "aa_parent_1"}, page_content='xxxxx2000'), Document(metadata={'parent_id': "aa_parent_2"}, page_content='xxxxx2000')]
+    对父文档进行分割
+
